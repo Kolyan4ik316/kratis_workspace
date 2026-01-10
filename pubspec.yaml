@@ -1,0 +1,14 @@
+name: kratis
+description: "Kratis Smart Farm and Home System"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.10.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  mqtt_client: ^10.0.0
+  fl_chart: ^0.70.2 
