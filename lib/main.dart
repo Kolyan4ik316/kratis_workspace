@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'screens/buildings_screen.dart';
+import 'screens/device_control_screen.dart';
 
 void main() => runApp(const KratisApp());
 
@@ -16,7 +17,8 @@ class KratisApp extends StatelessWidget {
         colorSchemeSeed: Colors.teal,
         useMaterial3: true,
       ),
-      home: const BuildingsScreen(),
+      //home: const BuildingsScreen(),
+      home: DeviceControlScreen(),
     );
   }
 }
