@@ -1,5 +1,6 @@
+import 'dart:async'; // Потрібно для Timer
 import 'package:flutter/material.dart';
-import '../services/p2p_service.dart'; // Імпортуємо наш сервіс
+import '../services/http_service.dart';
 
 class DeviceControlScreen extends StatefulWidget {
   @override
@@ -7,81 +8,126 @@ class DeviceControlScreen extends StatefulWidget {
 }
 
 class _DeviceControlScreenState extends State<DeviceControlScreen> {
-  final P2PService _p2pService = P2PService();
+  final HttpControlService _httpService = HttpControlService();
+  Timer? _pollingTimer;
 
   @override
   void initState() {
     super.initState();
-    _p2pService.init(); // Запускаємо з'єднання при старті екрану
+
+    // 1. Перший запит робимо одразу при старті
+    _httpService.getSensorData();
+
+    // 2. Запускаємо таймер на кожні 5 секунд
+    // Це буде оновлювати температуру і тримати ESP в режимі LAN
+    _pollingTimer = Timer.periodic(Duration(seconds: 5), (timer) {
+      _httpService.getSensorData();
+    });
   }
 
   @override
   void dispose() {
-    _p2pService.dispose(); // Закриваємо з'єднання при виході
+    // Обов'язково зупиняємо таймер, коли виходимо з екрану,
+    // щоб не садити батарею телефону
+    _pollingTimer?.cancel();
+    _httpService.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text("Розумний Дім (P2P)")),
+      appBar: AppBar(title: Text("Smart Hybrid Control")),
       body: Padding(
         padding: const EdgeInsets.all(20.0),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // ВІДОБРАЖЕННЯ ДАНИХ
-            StreamBuilder<String>(
-              stream: _p2pService.dataStream,
-              initialData: "Waiting for connection...",
-              builder: (context, snapshot) {
-                // Тут ми отримуємо дані від ESP32
-                String data = snapshot.data ?? "No Data";
-                return Container(
-                  padding: EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: Colors.blue.shade50,
-                    borderRadius: BorderRadius.circular(15),
-                    border: Border.all(color: Colors.blue),
-                  ),
-                  child: Text(
-                    data,
-                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-                    textAlign: TextAlign.center,
-                  ),
-                );
-              },
+            // --- ПАНЕЛЬ ДАНИХ ---
+            Expanded(
+              flex: 1, // Займає верхню частину
+              child: Center(
+                child: StreamBuilder<String>(
+                  stream: _httpService.logs,
+                  initialData: "Connecting...",
+                  builder: (context, snapshot) {
+                    return Container(
+                      padding: EdgeInsets.symmetric(
+                        vertical: 30,
+                        horizontal: 20,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade50,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: Colors.blue.shade200),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black12,
+                            blurRadius: 10,
+                            offset: Offset(0, 5),
+                          ),
+                        ],
+                      ),
+                      child: Text(
+                        snapshot.data ?? "--",
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.blue.shade900,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
             ),
 
-            SizedBox(height: 50),
-
-            // КНОПКИ КЕРУВАННЯ
-            Text("Керування Сервоприводом"),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                ElevatedButton(
-                  onPressed: () {
-                    // Надсилаємо команду на ESP32
-                    _p2pService.sendData("SERVO:0");
-                  },
-                  child: Text("Закрити (0°)"),
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                ),
-                ElevatedButton(
-                  onPressed: () {
-                    // Надсилаємо команду на ESP32
-                    _p2pService.sendData("SERVO:90");
-                  },
-                  child: Text("Відкрити (90°)"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
+            // --- КНОПКИ ---
+            Expanded(
+              flex: 1,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    "Керування Сервоприводом",
+                    style: TextStyle(color: Colors.grey[600]),
                   ),
-                ),
-              ],
+                  SizedBox(height: 20),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      _buildButton(
+                        Icons.lock_outline,
+                        "Закрити (0°)",
+                        Colors.redAccent,
+                        "SERVO:0",
+                      ),
+                      _buildButton(
+                        Icons.lock_open,
+                        "Відкрити (90°)",
+                        Colors.green,
+                        "SERVO:90",
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildButton(IconData icon, String label, Color color, String cmd) {
+    return ElevatedButton.icon(
+      onPressed: () => _httpService.sendCommand(cmd),
+      icon: Icon(icon, size: 28),
+      label: Text(label, style: TextStyle(fontSize: 16)),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: color,
+        padding: EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
     );
   }
