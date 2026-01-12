@@ -14,12 +14,11 @@ class _DeviceControlScreenState extends State<DeviceControlScreen> {
   @override
   void initState() {
     super.initState();
+    // Спочатку вантажимо збережений IP, потім запускаємо таймер
+    _httpService.init().then((_) {
+      _httpService.getSensorData();
+    });
 
-    // 1. Перший запит робимо одразу при старті
-    _httpService.getSensorData();
-
-    // 2. Запускаємо таймер на кожні 5 секунд
-    // Це буде оновлювати температуру і тримати ESP в режимі LAN
     _pollingTimer = Timer.periodic(Duration(seconds: 5), (timer) {
       _httpService.getSensorData();
     });
