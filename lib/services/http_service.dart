@@ -4,33 +4,38 @@ import 'package:http/http.dart' as http;
 
 class HttpControlService {
   final String serverBaseUrl = "https://kratis-p2p-server.onrender.com";
-  final String deviceId = "esp32_device_01";
 
-  // IP зберігається тільки в оперативній пам'яті.
-  // При перезапуску додатка він скидається, і ми знову питаємо сервер.
+  // Видаляємо хардкодний ID. Тепер ми будемо отримувати його від UI.
+  // final String deviceId = "esp32_device_01";
+
   String? _cachedLocalIp;
   bool _isLanConnected = false;
 
+  // Потік для текстових логів (для налагодження)
   final _logController = StreamController<String>.broadcast();
   Stream<String> get logs => _logController.stream;
 
-  // --- ГОЛОВНИЙ ЦИКЛ (Викликається таймером кожні 5 сек) ---
-  Future<void> getSensorData() async {
-    // 1. Спроба LAN (Пріоритет)
-    // Працює, тільки якщо ми вже дізналися IP під час цієї сесії
+  // НОВЕ: Потік для чистих даних (JSON), щоб оновлювати датчики на екрані
+  final _dataController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get deviceDataStream => _dataController.stream;
+
+  // --- ОТРИМАННЯ ДАНИХ ---
+  // Тепер приймаємо targetDeviceId
+  Future<void> getSensorData(String targetDeviceId) async {
+    // 1. Спроба LAN
     if (_cachedLocalIp != null) {
       bool success = await _fetchLocalStatus();
       if (success) {
         _isLanConnected = true;
-        return; // Якщо LAN ок - сервер не чіпаємо
+        return;
       }
     }
 
-    // 2. Якщо IP ще не знаємо або LAN відпав -> Йдемо в Хмару
+    // 2. Якщо LAN немає -> Хмара
     _isLanConnected = false;
-    await _syncWithCloud();
+    await _syncWithCloud(targetDeviceId);
 
-    // 3. Якщо Хмара дала нам IP -> Спробуємо LAN ще раз (фоново)
+    // 3. Фонові спроби відновити LAN
     if (!_isLanConnected && _cachedLocalIp != null) {
       _fetchLocalStatus();
     }
@@ -40,14 +45,13 @@ class HttpControlService {
   Future<bool> _fetchLocalStatus() async {
     try {
       final uri = Uri.parse("http://$_cachedLocalIp/status");
-      // Короткий таймаут (1.5с)
       final response = await http
           .get(uri)
           .timeout(Duration(milliseconds: 1500));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        _parseAndNotify(data, "LAN 🏠");
+        _processData(data, "LAN 🏠");
         return true;
       }
     } catch (e) {
@@ -57,24 +61,22 @@ class HttpControlService {
   }
 
   // --- ХМАРНИЙ ЗАПИТ ---
-  Future<void> _syncWithCloud() async {
+  Future<void> _syncWithCloud(String targetDeviceId) async {
     try {
-      final uri = Uri.parse("$serverBaseUrl/api/status?id=$deviceId");
+      final uri = Uri.parse("$serverBaseUrl/api/status?id=$targetDeviceId");
       final response = await http.get(uri);
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
 
-        // Оновлюємо IP в пам'яті
+        // Оновлюємо IP (якщо ESP повідомила новий локальний IP в хмару)
         if (data['local_ip'] != null && data['local_ip'] != _cachedLocalIp) {
           _cachedLocalIp = data['local_ip'];
-          _log("New IP found in Cloud: $_cachedLocalIp");
+          _log("New IP found: $_cachedLocalIp");
         }
 
         if (data['data'] != null) {
-          _parseAndNotify(data['data'], "CLOUD ☁️");
-        } else {
-          _log("[CLOUD] Waiting for device...");
+          _processData(data['data'], "CLOUD ☁️");
         }
       }
     } catch (e) {
@@ -83,29 +85,30 @@ class HttpControlService {
   }
 
   // --- ВІДПРАВКА КОМАНДИ ---
-  Future<void> sendCommand(String cmd) async {
-    _log("Sending: $cmd...");
+  Future<void> sendCommand(String targetDeviceId, String cmd) async {
+    _log("Sending to $targetDeviceId: $cmd...");
 
-    // Спроба локально
+    // 1. LAN
     if (_cachedLocalIp != null) {
       try {
         final uri = Uri.parse("http://$_cachedLocalIp/cmd?val=$cmd");
         final response = await http.get(uri).timeout(Duration(seconds: 1));
         if (response.statusCode == 200) {
           _log("✅ Sent via LAN");
-          getSensorData();
+          // Одразу оновлюємо дані
+          getSensorData(targetDeviceId);
           return;
         }
       } catch (e) {}
     }
 
-    // Спроба через хмару
+    // 2. CLOUD
     try {
       final uri = Uri.parse("$serverBaseUrl/api/command");
       await http.post(
         uri,
         headers: {"Content-Type": "application/json"},
-        body: jsonEncode({"targetId": deviceId, "cmd": cmd}),
+        body: jsonEncode({"targetId": targetDeviceId, "cmd": cmd}),
       );
       _log("✅ Queued via Cloud");
     } catch (e) {
@@ -113,11 +116,17 @@ class HttpControlService {
     }
   }
 
-  void _parseAndNotify(dynamic data, String source) {
-    var t = data['temp'];
-    var h = data['hum'];
-    String info = "[$source]\nT: $t°C  H: $h%";
-    _logController.add(info);
+  // Обробка вхідних даних
+  void _processData(dynamic data, String source) {
+    if (data is Map<String, dynamic>) {
+      // 1. Кидаємо в потік даних для UI
+      _dataController.add(data);
+
+      // 2. Кидаємо в логи для налагодження
+      var t = data['temp'];
+      var h = data['hum'];
+      _log("[$source] T: $t°C  H: $h%");
+    }
   }
 
   void _log(String msg) {
@@ -127,11 +136,9 @@ class HttpControlService {
 
   void dispose() {
     _logController.close();
+    _dataController.close();
   }
 
-  Future<void> init() async {
-    // Тут було завантаження shared_preferences.
-    // Зараз просто повертаємось, бо зберігати нічого не треба.
-    return;
-  }
+  // Stub для сумісності (виправлено синтаксис)
+  Future<void> init() async {}
 }

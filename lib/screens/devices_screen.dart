@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/kratis_models.dart';
 import '../services/data_manager.dart';
 import 'wifi_setup_screen.dart';
-import 'incubator_control_screen.dart';
+import 'incubator_v1_control_screen.dart';
 import 'device_control_screen.dart';
 
 class DevicesScreen extends StatefulWidget {
@@ -24,7 +24,6 @@ class _DevicesScreenState extends State<DevicesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // 1. Безпечний пошук кімнати
     Room? foundRoom;
     try {
       final building = _dataManager.buildings.firstWhere(
@@ -35,14 +34,12 @@ class _DevicesScreenState extends State<DevicesScreen> {
       foundRoom = null;
     }
 
-    // 2. Якщо кімнату видалили
     if (foundRoom == null) {
       return const Scaffold(
         body: Center(child: Text("Помилка: Кімнату не знайдено")),
       );
     }
 
-    // 3. Зберігаємо посилання
     final Room room = foundRoom;
 
     return Scaffold(
@@ -104,17 +101,25 @@ class _DevicesScreenState extends State<DevicesScreen> {
           device.name,
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
-        subtitle: Text('ID: ${device.id.substring(0, 8)}...'),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('ID: ${device.id.substring(0, 8)}...'),
+            if (device.type != 'unknown')
+              Text(
+                'Тип: ${device.type}',
+                style: TextStyle(fontSize: 10, color: Colors.grey),
+              ),
+          ],
+        ),
         trailing: const Icon(Icons.chevron_right),
         onTap: () {
-          // Тут перевіряємо не назву, а тип (або можна додати поле type в модель Device)
-          // Поки що орієнтуємось на іконку або назву для демо
-          if (device.iconCodePoint == Icons.agriculture.codePoint ||
+          if (device.type == 'incubator_v1' ||
               device.name.toLowerCase().contains('інкубатор')) {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (context) => IncubatorControlScreen(device: device),
+                builder: (context) => IncubatorV1ControlScreen(device: device),
               ),
             );
           } else {
@@ -132,25 +137,26 @@ class _DevicesScreenState extends State<DevicesScreen> {
   // --- ЛОГІКА ДОДАВАННЯ ---
 
   void _startDeviceSetup(BuildContext context) async {
-    // 1. Чекаємо результату від WifiSetupScreen
+    // 1. Отримуємо дані від WifiSetupScreen (включаючи device_id, якщо успішно)
     final result = await Navigator.push(
       context,
       MaterialPageRoute(builder: (context) => WifiSetupScreen()),
     );
 
-    // 2. Показуємо діалог ТІЛЬКИ якщо result == true (успішне збереження)
-    if (result == true && mounted) {
-      _showAddDeviceDialog(context);
+    // 2. Якщо є успіх і device_id
+    if (result != null && result is Map && result['success'] == true) {
+      final String realDeviceId = result['device_id'];
+      _showAddDeviceDialog(context, realDeviceId);
     }
   }
 
-  void _showAddDeviceDialog(BuildContext context) {
+  void _showAddDeviceDialog(BuildContext context, String realDeviceId) {
     final nameController = TextEditingController();
 
-    // Дефолтні значення
-    String deviceType = "agro";
+    // Дефолтні налаштування
+    String selectedType = "incubator_v1";
     Color selectedColor = Colors.orange;
-    IconData selectedIcon = Icons.agriculture;
+    IconData selectedIcon = Icons.egg;
 
     showDialog(
       context: context,
@@ -158,14 +164,14 @@ class _DevicesScreenState extends State<DevicesScreen> {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              title: const Text("Реєстрація Пристрою"),
+              title: const Text("Новий Пристрій"),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Text(
-                      "WiFi налаштовано! Тепер додайте пристрій у додаток.",
-                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    Text(
+                      "ID: $realDeviceId",
+                      style: TextStyle(fontSize: 10, color: Colors.grey),
                     ),
                     const SizedBox(height: 15),
                     TextField(
@@ -178,63 +184,37 @@ class _DevicesScreenState extends State<DevicesScreen> {
                     ),
                     const SizedBox(height: 15),
                     const Text(
-                      "Тип пристрою:",
+                      "Тип:",
                       style: TextStyle(fontWeight: FontWeight.bold),
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 10),
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
                       children: [
                         _choiceChip(
-                          "Сільське госп.",
-                          Icons.agriculture,
+                          "Інкубатор",
+                          Icons.egg,
                           Colors.orange,
-                          deviceType == "agro",
+                          selectedType == "incubator_v1",
                           () {
                             setDialogState(() {
-                              deviceType = "agro";
+                              selectedType = "incubator_v1";
                               selectedColor = Colors.orange;
-                              selectedIcon = Icons.agriculture;
+                              selectedIcon = Icons.egg;
                             });
                           },
                         ),
                         _choiceChip(
-                          "Розумна оселя",
-                          Icons.home_filled,
+                          "Інше",
+                          Icons.device_hub,
                           Colors.blue,
-                          deviceType == "smart_home",
+                          selectedType == "other",
                           () {
                             setDialogState(() {
-                              deviceType = "smart_home";
+                              selectedType = "other";
                               selectedColor = Colors.blue;
-                              selectedIcon = Icons.home_filled;
-                            });
-                          },
-                        ),
-                        _choiceChip(
-                          "Побутові",
-                          Icons.tv,
-                          Colors.purple,
-                          deviceType == "household",
-                          () {
-                            setDialogState(() {
-                              deviceType = "household";
-                              selectedColor = Colors.purple;
-                              selectedIcon = Icons.tv;
-                            });
-                          },
-                        ),
-                        _choiceChip(
-                          "Клімат",
-                          Icons.thermostat,
-                          Colors.teal,
-                          deviceType == "climate",
-                          () {
-                            setDialogState(() {
-                              deviceType = "climate";
-                              selectedColor = Colors.teal;
-                              selectedIcon = Icons.thermostat;
+                              selectedIcon = Icons.device_hub;
                             });
                           },
                         ),
@@ -251,14 +231,14 @@ class _DevicesScreenState extends State<DevicesScreen> {
                 ElevatedButton(
                   onPressed: () {
                     if (nameController.text.isNotEmpty) {
+                      // Створюємо пристрій з РЕАЛЬНИМ ID, який прийшов від ESP32
                       final newDevice = Device(
-                        id:
-                            "esp32_" +
-                            DateTime.now().millisecondsSinceEpoch.toString(),
+                        id: realDeviceId,
                         name: nameController.text,
                         iconCodePoint: selectedIcon.codePoint,
                         colorValue: selectedColor.value,
                         mqttTopic: "farm/device",
+                        type: selectedType,
                       );
 
                       _dataManager.addDevice(
@@ -270,7 +250,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
                       Navigator.pop(context);
                     }
                   },
-                  child: const Text("ДОДАТИ"),
+                  child: const Text("ЗБЕРЕГТИ"),
                 ),
               ],
             );
@@ -289,23 +269,11 @@ class _DevicesScreenState extends State<DevicesScreen> {
   ) {
     return ChoiceChip(
       label: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 18, color: selected ? Colors.white : color),
-          const SizedBox(width: 6),
-          Text(label),
-        ],
+        children: [Icon(icon, size: 16), SizedBox(width: 4), Text(label)],
       ),
       selected: selected,
       onSelected: (_) => onSelect(),
-      selectedColor: color,
-      backgroundColor: color.withOpacity(0.1),
-      labelStyle: TextStyle(
-        color: selected ? Colors.white : color,
-        fontWeight: selected ? FontWeight.bold : FontWeight.normal,
-      ),
-      elevation: selected ? 2 : 0,
-      showCheckmark: false,
+      selectedColor: color.withOpacity(0.3),
     );
   }
 
@@ -321,7 +289,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
             children: [
               ListTile(
                 leading: const Icon(Icons.drive_file_move),
-                title: const Text("Перемістити в іншу кімнату"),
+                title: const Text("Перемістити"),
                 onTap: () {
                   Navigator.pop(context);
                   _showMoveDialog(context, device);
@@ -330,7 +298,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
               ListTile(
                 leading: const Icon(Icons.delete, color: Colors.red),
                 title: const Text(
-                  "Видалити пристрій",
+                  "Видалити",
                   style: TextStyle(color: Colors.red),
                 ),
                 onTap: () {
@@ -408,7 +376,6 @@ class _DevicesScreenState extends State<DevicesScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: Text("Видалити '${device.name}'?"),
-        content: const Text("Це видалить пристрій з додатку."),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
@@ -424,10 +391,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
               setState(() {});
               Navigator.pop(context);
             },
-            child: const Text(
-              "ТАК, ВИДАЛИТИ",
-              style: TextStyle(color: Colors.red),
-            ),
+            child: const Text("ТАК", style: TextStyle(color: Colors.red)),
           ),
         ],
       ),

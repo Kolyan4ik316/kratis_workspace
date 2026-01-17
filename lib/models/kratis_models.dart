@@ -3,11 +3,14 @@ import 'package:flutter/material.dart';
 class Device {
   final String id;
   String name;
-  final int iconCodePoint; // Зберігаємо код іконки
-  final int colorValue; // Зберігаємо колір як int
-  final String mqttTopic; // Використовуємо як тип або шлях
+  final int iconCodePoint;
+  final int colorValue;
+  final String mqttTopic;
   String status;
-  String? ip; // IP для локального керування
+  String? ip;
+
+  // НОВЕ: Тип пристрою (incubator_v1, relay, sensor тощо)
+  final String type;
 
   Device({
     required this.id,
@@ -17,14 +20,12 @@ class Device {
     required this.mqttTopic,
     this.status = 'Offline',
     this.ip,
+    this.type = 'unknown', // Дефолт
   });
 
-  // Відновлюємо IconData з коду
   IconData get icon => IconData(iconCodePoint, fontFamily: 'MaterialIcons');
-  // Відновлюємо Color з int
   Color get color => Color(colorValue);
 
-  // --- JSON SERIALIZATION ---
   Map<String, dynamic> toJson() => {
     'id': id,
     'name': name,
@@ -33,6 +34,7 @@ class Device {
     'mqttTopic': mqttTopic,
     'status': status,
     'ip': ip,
+    'type': type, // Зберігаємо тип
   };
 
   factory Device.fromJson(Map<String, dynamic> json) {
@@ -44,10 +46,12 @@ class Device {
       mqttTopic: json['mqttTopic'],
       status: json['status'] ?? 'Offline',
       ip: json['ip'],
+      type: json['type'] ?? 'unknown',
     );
   }
 }
 
+// Room і Building залишаються без змін, але треба навести їх тут для повноти файлу
 class Room {
   final String id;
   String name;

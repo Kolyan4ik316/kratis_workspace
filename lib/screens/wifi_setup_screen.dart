@@ -14,58 +14,72 @@ class _WifiSetupScreenState extends State<WifiSetupScreen> {
   String _statusMessage = "";
   bool _isLoading = false;
 
-  // Унікальний ID телефону (можна генерувати UUID, тут для прикладу статичний)
-  // В реальному додатку краще використовувати пакет device_info_plus або uuid
   final String _myPhoneId = "android_user_001";
 
-  Future<void> _saveConfig() async {
+  Future<void> _sendConfigToEsp() async {
+    if (!mounted) return;
+
     setState(() {
       _isLoading = true;
-      _statusMessage = "Підключення до інкубатора...";
+      _statusMessage = "Підключення до пристрою...";
     });
 
     final ssid = _ssidController.text;
     final pass = _passController.text;
 
     try {
-      // 1. Стукаємо на адресу ESP32 в режимі AP
       final uri = Uri.parse("http://192.168.4.1/save");
 
       final response = await http
           .post(
             uri,
-            headers: {"Content-Type": "application/json"}, // Важливо для ESP32
+            headers: {"Content-Type": "application/json"},
             body: jsonEncode({
               "ssid": ssid,
               "pass": pass,
-              "user_id": _myPhoneId, // Відправляємо ID для прив'язки
+              "user_id": _myPhoneId,
             }),
           )
           .timeout(Duration(seconds: 5));
 
+      if (!mounted) return;
+
       if (response.statusCode == 200) {
+        // Парсимо відповідь для отримання ID
+        final respData = jsonDecode(response.body);
+        final String realDeviceId = respData['device_id'];
+
         setState(() {
-          _statusMessage = "✅ Збережено! Пристрій перезавантажується...";
+          _statusMessage = "✅ Успіх! Отримано ID: $realDeviceId";
         });
 
-        // Повертаємось назад через 2 секунди
-        Future.delayed(Duration(seconds: 2), () {
-          Navigator.pop(context, true); // true означає успіх
-        });
+        await Future.delayed(Duration(seconds: 2));
+        if (mounted) {
+          // Повертаємо map з даними
+          Navigator.pop(context, {
+            'success': true,
+            'device_id': realDeviceId,
+            'ssid': ssid,
+            'pass': pass,
+          });
+        }
       } else {
         setState(() {
           _statusMessage = "Помилка ESP: ${response.statusCode}";
         });
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _statusMessage =
-            "❌ Не можу знайти пристрій!\nПереконайтесь, що ви підключені до WiFi 'Smart-Incubator'";
+            "❌ Не вдалося з'єднатися.\nПеревірте WiFi 'Smart-Incubator'";
       });
     } finally {
-      setState(() {
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -82,29 +96,25 @@ class _WifiSetupScreenState extends State<WifiSetupScreen> {
               Icon(Icons.wifi_tethering, size: 80, color: Colors.blue),
               SizedBox(height: 20),
 
-              Text(
-                "Крок 1: Увімкніть режим налаштування",
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              Text(
-                "Затисніть кнопку на платі на 3 секунди, поки не з'явиться 'APP SETUP MODE'.",
+              _buildStep(
+                1,
+                "Увімкніть режим налаштування",
+                "Затисніть кнопку на платі на 3 секунди (SETUP MODE).",
               ),
               SizedBox(height: 15),
-
-              Text(
-                "Крок 2: Підключіться до WiFi",
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              Text(
-                "Зайдіть в налаштування телефону і підключіться до мережі 'Smart-Incubator' (Пароль: 12345678).",
+              _buildStep(
+                2,
+                "Підключіться до WiFi",
+                "Мережа: Smart-Incubator, Пароль: 12345678",
               ),
               SizedBox(height: 15),
-
-              Text(
-                "Крок 3: Введіть дані вашого Роутера",
-                style: TextStyle(fontWeight: FontWeight.bold),
+              _buildStep(
+                3,
+                "Дані вашого WiFi",
+                "Введіть назву та пароль вашого роутера.",
               ),
-              SizedBox(height: 10),
+
+              SizedBox(height: 20),
 
               TextField(
                 controller: _ssidController,
@@ -131,10 +141,10 @@ class _WifiSetupScreenState extends State<WifiSetupScreen> {
                 Center(child: CircularProgressIndicator())
               else
                 ElevatedButton(
-                  onPressed: _saveConfig,
+                  onPressed: _sendConfigToEsp,
                   child: Padding(
                     padding: EdgeInsets.all(15),
-                    child: Text("ЗБЕРЕГТИ І ПРИВ'ЯЗАТИ"),
+                    child: Text("ЗБЕРЕГТИ НАЛАШТУВАННЯ"),
                   ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.green,
@@ -157,6 +167,19 @@ class _WifiSetupScreenState extends State<WifiSetupScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildStep(int num, String title, String desc) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          "Крок $num: $title",
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        Text(desc, style: TextStyle(fontSize: 13, color: Colors.grey[600])),
+      ],
     );
   }
 }
