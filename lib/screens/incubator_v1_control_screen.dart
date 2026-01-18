@@ -149,7 +149,7 @@ class _IncubatorV1ControlScreenState extends State<IncubatorV1ControlScreen> {
                     ),
                     _buildMetricCard(
                       'Вологість',
-                      '${currentHum.toStringAsFixed(0)}%',
+                      '${currentHum.toStringAsFixed(1)}%',
                       Icons.water_drop,
                       Colors.blue,
                     ),
