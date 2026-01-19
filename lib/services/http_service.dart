@@ -5,23 +5,22 @@ import 'package:http/http.dart' as http;
 class HttpControlService {
   final String serverBaseUrl = "https://kratis-p2p-server.onrender.com";
 
-  // Видаляємо хардкодний ID. Тепер ми будемо отримувати його від UI.
-  // final String deviceId = "esp32_device_01";
-
   String? _cachedLocalIp;
   bool _isLanConnected = false;
+  bool _isDisposed = false; // ✅ Додано прапорець стану
 
-  // Потік для текстових логів (для налагодження)
+  // Потік для текстових логів
   final _logController = StreamController<String>.broadcast();
   Stream<String> get logs => _logController.stream;
 
-  // НОВЕ: Потік для чистих даних (JSON), щоб оновлювати датчики на екрані
+  // Потік для чистих даних (JSON)
   final _dataController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get deviceDataStream => _dataController.stream;
 
   // --- ОТРИМАННЯ ДАНИХ ---
-  // Тепер приймаємо targetDeviceId
   Future<void> getSensorData(String targetDeviceId) async {
+    if (_isDisposed) return; // ✅ Якщо сервіс знищено, не починаємо роботу
+
     // 1. Спроба LAN
     if (_cachedLocalIp != null) {
       bool success = await _fetchLocalStatus();
@@ -35,19 +34,20 @@ class HttpControlService {
     _isLanConnected = false;
     await _syncWithCloud(targetDeviceId);
 
-    // 3. Фонові спроби відновити LAN
-    if (!_isLanConnected && _cachedLocalIp != null) {
+    // 3. Фонові спроби відновити LAN (тільки якщо не знищено)
+    if (!_isLanConnected && _cachedLocalIp != null && !_isDisposed) {
       _fetchLocalStatus();
     }
   }
 
   // --- ЛОКАЛЬНИЙ ЗАПИТ ---
   Future<bool> _fetchLocalStatus() async {
+    if (_isDisposed) return false;
     try {
       final uri = Uri.parse("http://$_cachedLocalIp/status");
       final response = await http
           .get(uri)
-          .timeout(Duration(milliseconds: 1500));
+          .timeout(const Duration(milliseconds: 1500));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -62,9 +62,12 @@ class HttpControlService {
 
   // --- ХМАРНИЙ ЗАПИТ ---
   Future<void> _syncWithCloud(String targetDeviceId) async {
+    if (_isDisposed) return;
     try {
       final uri = Uri.parse("$serverBaseUrl/api/status?id=$targetDeviceId");
       final response = await http.get(uri);
+
+      if (_isDisposed) return; // ✅ Перевірка після await
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -86,16 +89,21 @@ class HttpControlService {
 
   // --- ВІДПРАВКА КОМАНДИ ---
   Future<void> sendCommand(String targetDeviceId, String cmd) async {
+    if (_isDisposed) return;
     _log("Sending to $targetDeviceId: $cmd...");
 
     // 1. LAN
     if (_cachedLocalIp != null) {
       try {
         final uri = Uri.parse("http://$_cachedLocalIp/cmd?val=$cmd");
-        final response = await http.get(uri).timeout(Duration(seconds: 1));
+        final response = await http
+            .get(uri)
+            .timeout(const Duration(seconds: 1));
+
+        if (_isDisposed) return; // ✅ Перевірка після await
+
         if (response.statusCode == 200) {
           _log("✅ Sent via LAN");
-          // Одразу оновлюємо дані
           getSensorData(targetDeviceId);
           return;
         }
@@ -110,19 +118,23 @@ class HttpControlService {
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({"targetId": targetDeviceId, "cmd": cmd}),
       );
-      _log("✅ Queued via Cloud");
+      if (!_isDisposed) _log("✅ Queued via Cloud");
     } catch (e) {
-      _log("❌ Cmd Failed");
+      if (!_isDisposed) _log("❌ Cmd Failed");
     }
   }
 
   // Обробка вхідних даних
   void _processData(dynamic data, String source) {
-    if (data is Map<String, dynamic>) {
-      // 1. Кидаємо в потік даних для UI
-      _dataController.add(data);
+    if (_isDisposed) return; // ✅ Захист
 
-      // 2. Кидаємо в логи для налагодження
+    if (data is Map<String, dynamic>) {
+      // 1. Кидаємо в потік даних для UI (з перевіркою)
+      if (!_dataController.isClosed) {
+        _dataController.add(data);
+      }
+
+      // 2. Кидаємо в логи
       var t = data['temp'];
       var h = data['hum'];
       _log("[$source] T: $t°C  H: $h%");
@@ -130,15 +142,19 @@ class HttpControlService {
   }
 
   void _log(String msg) {
-    print("[HttpService] $msg");
-    _logController.add(msg);
+    print("[HttpService] $msg"); // Print працює завжди
+
+    // ✅ А в Stream пишемо, тільки якщо він живий
+    if (!_isDisposed && !_logController.isClosed) {
+      _logController.add(msg);
+    }
   }
 
   void dispose() {
+    _isDisposed = true; // ✅ Ставимо мітку смерті
     _logController.close();
     _dataController.close();
   }
 
-  // Stub для сумісності (виправлено синтаксис)
   Future<void> init() async {}
 }
