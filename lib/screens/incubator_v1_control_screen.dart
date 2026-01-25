@@ -33,6 +33,9 @@ class _IncubatorV1ControlScreenState extends State<IncubatorV1ControlScreen> {
   double turnDistance = 4.5;
   int day = 12;
 
+  // Прапорець, щоб знати, чи ми вже синхронізували час у цій сесії
+  bool _timeSynced = false;
+
   // Дані для графіків (демо)
   List<FlSpot> tempHistory = [const FlSpot(0, 37.5)];
   List<FlSpot> humidityHistory = [const FlSpot(0, 55)];
@@ -53,11 +56,52 @@ class _IncubatorV1ControlScreenState extends State<IncubatorV1ControlScreen> {
     _watchdogTimer = Timer.periodic(const Duration(minutes: 1), (timer) {
       _checkConnectionStatus();
     });
+
+    // 4. АВТОМАТИЧНА СИНХРОНІЗАЦІЯ ЧАСУ
+    // Робимо невелику затримку (1 сек), щоб UI встиг побудуватися перед показом SnackBar
+    Future.delayed(const Duration(seconds: 1), () {
+      if (mounted && !_timeSynced) {
+        _syncDeviceTime();
+      }
+    });
   }
 
   void _fetchData() {
     // Викликаємо сервіс з конкретним ID цього інкубатора
     _httpService.getSensorData(widget.device.id);
+  }
+
+  // --- ДОПОМІЖНИЙ МЕТОД ДЛЯ ДАТИ ---
+  // Повертає дату у форматі DD.MM.YY (день.місяць.останні_2_цифри_року)
+  String _getFormattedDate() {
+    final now = DateTime.now();
+    final d = now.day.toString().padLeft(2, '0');
+    final m = now.month.toString().padLeft(2, '0');
+    final y = (now.year % 100).toString().padLeft(2, '0'); // Останні 2 цифри
+    return "$d.$m.$y";
+  }
+
+  // --- ЛОГІКА СИНХРОНІЗАЦІЇ ЧАСУ ---
+  void _syncDeviceTime() {
+    // Беремо поточний час телефону (Unix timestamp у секундах)
+    int epochTime = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+    print("⏳ Sending Time Sync: $epochTime (Date: ${_getFormattedDate()})");
+
+    // Відправляємо команду на ESP32 (ESP сама розбере дату з epochTime)
+    _httpService.sendCommand(widget.device.id, "SYNC_TIME:$epochTime");
+
+    setState(() {
+      _timeSynced = true;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("🕒 Час та дата синхронізовані!"),
+        duration: Duration(seconds: 2),
+        backgroundColor: Colors.teal,
+      ),
+    );
   }
 
   void _checkConnectionStatus() {
@@ -74,8 +118,6 @@ class _IncubatorV1ControlScreenState extends State<IncubatorV1ControlScreen> {
             backgroundColor: Colors.red,
           ),
         );
-        // Тут можна додати логіку видалення пари, якщо це критично:
-        // Navigator.pop(context, 'delete');
       }
     }
   }
@@ -106,6 +148,12 @@ class _IncubatorV1ControlScreenState extends State<IncubatorV1ControlScreen> {
           ],
         ),
         actions: [
+          // Кнопка примусової синхронізації часу
+          IconButton(
+            icon: const Icon(Icons.access_time),
+            tooltip: "Синхронізувати час",
+            onPressed: _syncDeviceTime,
+          ),
           IconButton(
             icon: Icon(
               showCharts ? Icons.show_chart : Icons.show_chart_outlined,
@@ -120,13 +168,11 @@ class _IncubatorV1ControlScreenState extends State<IncubatorV1ControlScreen> {
           // Якщо прийшли нові дані - оновлюємо змінні
           if (snapshot.hasData) {
             final data = snapshot.data!;
-            // Оновлюємо тільки якщо дані валідні
             if (data['temp'] != null) {
               currentTemp = (data['temp'] as num).toDouble();
               currentHum = (data['hum'] as num).toDouble();
               lastDataTime = DateTime.now();
               if (!isOnline) {
-                // Якщо були офлайн - стали онлайн
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   if (mounted) setState(() => isOnline = true);
                 });
@@ -138,7 +184,7 @@ class _IncubatorV1ControlScreenState extends State<IncubatorV1ControlScreen> {
             padding: const EdgeInsets.all(16),
             child: Column(
               children: [
-                // 1. Основні показники (З даними з Streams)
+                // 1. Основні показники
                 Row(
                   children: [
                     _buildMetricCard(
@@ -164,7 +210,7 @@ class _IncubatorV1ControlScreenState extends State<IncubatorV1ControlScreen> {
 
                 const SizedBox(height: 16),
 
-                // 3. Інфо панель (статична поки що)
+                // 3. Інфо панель
                 Card(
                   elevation: 2,
                   shape: RoundedRectangleBorder(
@@ -174,14 +220,24 @@ class _IncubatorV1ControlScreenState extends State<IncubatorV1ControlScreen> {
                     padding: const EdgeInsets.all(16),
                     child: Column(
                       children: [
+                        // НОВИЙ РЯДОК З ДАТОЮ
+                        _buildInfoRow(
+                          'Сьогодні',
+                          _getFormattedDate(),
+                          Icons.today_outlined,
+                        ),
+                        const Divider(height: 24),
+
                         _buildInfoRow('Режим', selectedMode, Icons.pets),
                         const Divider(height: 24),
+
                         _buildInfoRow(
                           'День',
                           '$day-й день',
                           Icons.calendar_today,
                         ),
                         const Divider(height: 24),
+
                         _buildInfoRow(
                           'Поворот',
                           '$turnDistance см',
@@ -194,7 +250,7 @@ class _IncubatorV1ControlScreenState extends State<IncubatorV1ControlScreen> {
                 ),
                 const SizedBox(height: 16),
 
-                // 4. Керування (відправка команд)
+                // 4. Керування
                 const Align(
                   alignment: Alignment.centerLeft,
                   child: Text(
@@ -253,9 +309,6 @@ class _IncubatorV1ControlScreenState extends State<IncubatorV1ControlScreen> {
       ),
     );
   }
-
-  // ... (Решта методів побудови UI: _buildMetricCard, _buildAdvancedChart і т.д. залишаються такими ж, як були) ...
-  // Я їх скорочу для економії місця, але вони мають бути тут (скопіюйте їх з попереднього incubator_control_screen.dart)
 
   Widget _buildMetricCard(
     String label,
