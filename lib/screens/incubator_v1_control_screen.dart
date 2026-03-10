@@ -433,8 +433,14 @@ class _IncubatorV1ControlScreenState extends State<IncubatorV1ControlScreen> {
                 if (started)
                   TextButton.icon(
                     onPressed: _stopIncubation,
-                    icon: const Icon(Icons.stop_circle_outlined, color: Colors.redAccent),
-                    label: const Text('Стоп', style: TextStyle(color: Colors.redAccent)),
+                    icon: const Icon(
+                      Icons.stop_circle_outlined,
+                      color: Colors.redAccent,
+                    ),
+                    label: const Text(
+                      'Стоп',
+                      style: TextStyle(color: Colors.redAccent),
+                    ),
                   )
                 else
                   ElevatedButton.icon(
@@ -461,11 +467,11 @@ class _IncubatorV1ControlScreenState extends State<IncubatorV1ControlScreen> {
               ),
               const SizedBox(height: 2),
               Text(
-                'Старт: ${_incubationStart!.day.toString().padLeft(2,'0')}'
-                '.${_incubationStart!.month.toString().padLeft(2,'0')}'
+                'Старт: ${_incubationStart!.day.toString().padLeft(2, '0')}'
+                '.${_incubationStart!.month.toString().padLeft(2, '0')}'
                 '.${_incubationStart!.year}'
-                ' о ${_incubationStart!.hour.toString().padLeft(2,'0')}'
-                ':${_incubationStart!.minute.toString().padLeft(2,'0')}',
+                ' о ${_incubationStart!.hour.toString().padLeft(2, '0')}'
+                ':${_incubationStart!.minute.toString().padLeft(2, '0')}',
                 style: const TextStyle(color: Colors.grey, fontSize: 11),
               ),
             ],
