@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../models/kratis_models.dart';
 import '../services/http_service.dart'; // Підключаємо наш сервіс
+import 'incubator_v1_calibration.dart';
 
 class IncubatorV1ControlScreen extends StatefulWidget {
   final Device device;
@@ -19,6 +21,7 @@ class _IncubatorV1ControlScreenState extends State<IncubatorV1ControlScreen> {
 
   Timer? _pollingTimer;
   Timer? _watchdogTimer;
+  Timer? _tickTimer;
 
   // Останні отримані дані
   double currentTemp = 0.0;
@@ -31,10 +34,18 @@ class _IncubatorV1ControlScreenState extends State<IncubatorV1ControlScreen> {
   bool showCharts = false;
   String selectedMode = 'Кури';
   double turnDistance = 4.5;
-  int day = 12;
 
-  // Прапорець, щоб знати, чи ми вже синхронізували час у цій сесії
-  bool _timeSynced = false;
+  // PID / Авто-температура
+  bool _pidEnabled = false;
+  double _targetTemp = 37.7;
+
+  // Авто-вологість
+  bool _autoHumEnabled = false;
+  double _targetHum = 50.0;
+
+  // Інкубація
+  DateTime? _incubationStart;
+  static const _kStartFile = 'kratis_incubation_start.txt';
 
   // Дані для графіків (демо)
   List<FlSpot> tempHistory = [const FlSpot(0, 37.5)];
@@ -57,13 +68,8 @@ class _IncubatorV1ControlScreenState extends State<IncubatorV1ControlScreen> {
       _checkConnectionStatus();
     });
 
-    // 4. АВТОМАТИЧНА СИНХРОНІЗАЦІЯ ЧАСУ
-    // Робимо невелику затримку (1 сек), щоб UI встиг побудуватися перед показом SnackBar
-    Future.delayed(const Duration(seconds: 1), () {
-      if (mounted && !_timeSynced) {
-        _syncDeviceTime();
-      }
-    });
+    // 4. Відновлюємо час старту інкубації (якщо є)
+    _loadStartTime();
   }
 
   void _fetchData() {
@@ -71,36 +77,110 @@ class _IncubatorV1ControlScreenState extends State<IncubatorV1ControlScreen> {
     _httpService.getSensorData(widget.device.id);
   }
 
-  // --- ДОПОМІЖНИЙ МЕТОД ДЛЯ ДАТИ ---
-  // Повертає дату у форматі DD.MM.YY (день.місяць.останні_2_цифри_року)
-  String _getFormattedDate() {
-    final now = DateTime.now();
-    final d = now.day.toString().padLeft(2, '0');
-    final m = now.month.toString().padLeft(2, '0');
-    final y = (now.year % 100).toString().padLeft(2, '0'); // Останні 2 цифри
-    return "$d.$m.$y";
+  // --- ІНКУБАЦІЯ: збереження/завантаження через dart:io ---
+  File _getStartFile() {
+    return File('${Directory.systemTemp.path}/$_kStartFile');
   }
 
-  // --- ЛОГІКА СИНХРОНІЗАЦІЇ ЧАСУ ---
-  void _syncDeviceTime() {
-    // Беремо поточний час телефону (Unix timestamp у секундах)
-    int epochTime = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+  Future<void> _loadStartTime() async {
+    try {
+      final file = _getStartFile();
+      if (await file.exists()) {
+        final content = await file.readAsString();
+        final ms = int.tryParse(content.trim());
+        if (ms != null && mounted) {
+          setState(() {
+            _incubationStart = DateTime.fromMillisecondsSinceEpoch(ms);
+          });
+          _startTickTimer();
+        }
+      }
+    } catch (_) {}
+  }
 
-    print("⏳ Sending Time Sync: $epochTime (Date: ${_getFormattedDate()})");
+  Future<void> _saveStartTime(DateTime dt) async {
+    try {
+      await _getStartFile().writeAsString(dt.millisecondsSinceEpoch.toString());
+    } catch (_) {}
+  }
 
-    // Відправляємо команду на ESP32 (ESP сама розбере дату з epochTime)
-    _httpService.sendCommand(widget.device.id, "SYNC_TIME:$epochTime");
+  Future<void> _deleteStartTime() async {
+    try {
+      final file = _getStartFile();
+      if (await file.exists()) await file.delete();
+    } catch (_) {}
+  }
 
-    setState(() {
-      _timeSynced = true;
+  void _startTickTimer() {
+    _tickTimer?.cancel();
+    _tickTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
     });
+  }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text("🕒 Час та дата синхронізовані!"),
-        duration: Duration(seconds: 2),
-        backgroundColor: Colors.teal,
+  void _startIncubation() {
+    final now = DateTime.now();
+    setState(() => _incubationStart = now);
+    _saveStartTime(now);
+    _startTickTimer();
+  }
+
+  void _stopIncubation() {
+    showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Зупинити інкубацію?'),
+        content: const Text('Таймер буде скинуто. Продовжити?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Скасувати'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Зупинити', style: TextStyle(color: Colors.red)),
+          ),
+        ],
       ),
+    ).then((confirmed) {
+      if (confirmed == true) {
+        setState(() => _incubationStart = null);
+        _deleteStartTime();
+        _tickTimer?.cancel();
+      }
+    });
+  }
+
+  String _formatElapsed() {
+    if (_incubationStart == null) return '';
+    final elapsed = DateTime.now().difference(_incubationStart!);
+    final d = elapsed.inDays;
+    final h = (elapsed.inHours % 24).toString().padLeft(2, '0');
+    final m = (elapsed.inMinutes % 60).toString().padLeft(2, '0');
+    final s = (elapsed.inSeconds % 60).toString().padLeft(2, '0');
+    return '${d}д $h:$m:$s';
+  }
+
+  // --- Команди авто-керування ---
+  void _sendPidEn(bool val) {
+    _httpService.sendCommand(widget.device.id, 'PID_EN:${val ? 1 : 0}');
+  }
+
+  void _sendPidTemp(double val) {
+    _httpService.sendCommand(
+      widget.device.id,
+      'PID_TEMP:${val.toStringAsFixed(1)}',
+    );
+  }
+
+  void _sendHumEn(bool val) {
+    _httpService.sendCommand(widget.device.id, 'HUM_EN:${val ? 1 : 0}');
+  }
+
+  void _sendHumTarget(double val) {
+    _httpService.sendCommand(
+      widget.device.id,
+      'HUM_TARGET:${val.toStringAsFixed(1)}',
     );
   }
 
@@ -126,6 +206,7 @@ class _IncubatorV1ControlScreenState extends State<IncubatorV1ControlScreen> {
   void dispose() {
     _pollingTimer?.cancel();
     _watchdogTimer?.cancel();
+    _tickTimer?.cancel();
     _httpService.dispose();
     super.dispose();
   }
@@ -148,17 +229,22 @@ class _IncubatorV1ControlScreenState extends State<IncubatorV1ControlScreen> {
           ],
         ),
         actions: [
-          // Кнопка примусової синхронізації часу
-          IconButton(
-            icon: const Icon(Icons.access_time),
-            tooltip: "Синхронізувати час",
-            onPressed: _syncDeviceTime,
-          ),
           IconButton(
             icon: Icon(
               showCharts ? Icons.show_chart : Icons.show_chart_outlined,
             ),
             onPressed: () => setState(() => showCharts = !showCharts),
+          ),
+          IconButton(
+            icon: const Icon(Icons.build_outlined),
+            tooltip: 'Калібровка',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) =>
+                    IncubatorV1CalibrationScreen(device: widget.device),
+              ),
+            ),
           ),
         ],
       ),
@@ -184,6 +270,10 @@ class _IncubatorV1ControlScreenState extends State<IncubatorV1ControlScreen> {
             padding: const EdgeInsets.all(16),
             child: Column(
               children: [
+                // 0. Таймер інкубації
+                _buildIncubationCard(),
+                const SizedBox(height: 16),
+
                 // 1. Основні показники
                 Row(
                   children: [
@@ -220,22 +310,7 @@ class _IncubatorV1ControlScreenState extends State<IncubatorV1ControlScreen> {
                     padding: const EdgeInsets.all(16),
                     child: Column(
                       children: [
-                        // НОВИЙ РЯДОК З ДАТОЮ
-                        _buildInfoRow(
-                          'Сьогодні',
-                          _getFormattedDate(),
-                          Icons.today_outlined,
-                        ),
-                        const Divider(height: 24),
-
                         _buildInfoRow('Режим', selectedMode, Icons.pets),
-                        const Divider(height: 24),
-
-                        _buildInfoRow(
-                          'День',
-                          '$day-й день',
-                          Icons.calendar_today,
-                        ),
                         const Divider(height: 24),
 
                         _buildInfoRow(
@@ -293,19 +368,109 @@ class _IncubatorV1ControlScreenState extends State<IncubatorV1ControlScreen> {
                       );
                     }),
                     _buildActionButton(
-                      'Калібровка',
+                      'Ручне керув.',
                       Icons.build,
                       Colors.grey,
-                      () {
-                        // Тут можна відкрити діалог калібровки
-                      },
+                      () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => IncubatorV1CalibrationScreen(
+                            device: widget.device,
+                          ),
+                        ),
+                      ),
                     ),
                   ],
                 ),
+
+                const SizedBox(height: 24),
+
+                // 5. Авто керування
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    ' Авто керування',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                _buildAutoControlCard(),
               ],
             ),
           );
         },
+      ),
+    );
+  }
+
+  Widget _buildIncubationCard() {
+    final started = _incubationStart != null;
+    return Card(
+      elevation: 3,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      color: started ? Colors.teal.withOpacity(0.1) : null,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.egg_outlined,
+                  color: started ? Colors.tealAccent : Colors.grey,
+                  size: 26,
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  started ? 'Інкубація триває' : 'Інкубація не розпочата',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: started ? Colors.tealAccent : Colors.grey,
+                  ),
+                ),
+                const Spacer(),
+                if (started)
+                  TextButton.icon(
+                    onPressed: _stopIncubation,
+                    icon: const Icon(Icons.stop_circle_outlined, color: Colors.redAccent),
+                    label: const Text('Стоп', style: TextStyle(color: Colors.redAccent)),
+                  )
+                else
+                  ElevatedButton.icon(
+                    onPressed: _startIncubation,
+                    icon: const Icon(Icons.play_circle_outline),
+                    label: const Text('Старт'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.teal,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+              ],
+            ),
+            if (started) ...[
+              const SizedBox(height: 8),
+              Text(
+                _formatElapsed(),
+                style: const TextStyle(
+                  fontSize: 32,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 2,
+                  fontFeatures: [FontFeature.tabularFigures()],
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'Старт: ${_incubationStart!.day.toString().padLeft(2,'0')}'
+                '.${_incubationStart!.month.toString().padLeft(2,'0')}'
+                '.${_incubationStart!.year}'
+                ' о ${_incubationStart!.hour.toString().padLeft(2,'0')}'
+                ':${_incubationStart!.minute.toString().padLeft(2,'0')}',
+                style: const TextStyle(color: Colors.grey, fontSize: 11),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -427,6 +592,141 @@ class _IncubatorV1ControlScreenState extends State<IncubatorV1ControlScreen> {
             Text(
               state ? 'Увімкн.' : 'Вимкн.',
               style: const TextStyle(fontSize: 9, color: Colors.grey),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAutoControlCard() {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            // --- PID ТЕМПЕРАТУРА ---
+            Row(
+              children: [
+                const Icon(Icons.thermostat, color: Colors.orange),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text(
+                    'Авто-температура (PID)',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                Switch(
+                  value: _pidEnabled,
+                  activeColor: Colors.orange,
+                  onChanged: (val) {
+                    setState(() => _pidEnabled = val);
+                    _sendPidEn(val);
+                  },
+                ),
+              ],
+            ),
+            AnimatedCrossFade(
+              duration: const Duration(milliseconds: 250),
+              crossFadeState: _pidEnabled
+                  ? CrossFadeState.showFirst
+                  : CrossFadeState.showSecond,
+              firstChild: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Ціль:',
+                        style: TextStyle(color: Colors.grey, fontSize: 12),
+                      ),
+                      Text(
+                        '${_targetTemp.toStringAsFixed(1)} °C',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.orange,
+                        ),
+                      ),
+                    ],
+                  ),
+                  Slider(
+                    value: _targetTemp,
+                    min: 20.0,
+                    max: 45.0,
+                    divisions: 250,
+                    label: '${_targetTemp.toStringAsFixed(1)}°C',
+                    activeColor: Colors.orange,
+                    inactiveColor: Colors.orange.withOpacity(0.3),
+                    onChanged: (val) => setState(() => _targetTemp = val),
+                    onChangeEnd: _sendPidTemp,
+                  ),
+                ],
+              ),
+              secondChild: const SizedBox.shrink(),
+            ),
+
+            const Divider(height: 24),
+
+            // --- АВТО-ВОЛОГІСТЬ ---
+            Row(
+              children: [
+                const Icon(Icons.water_drop, color: Colors.blueAccent),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text(
+                    'Авто-вологість',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                Switch(
+                  value: _autoHumEnabled,
+                  activeColor: Colors.blueAccent,
+                  onChanged: (val) {
+                    setState(() => _autoHumEnabled = val);
+                    _sendHumEn(val);
+                  },
+                ),
+              ],
+            ),
+            AnimatedCrossFade(
+              duration: const Duration(milliseconds: 250),
+              crossFadeState: _autoHumEnabled
+                  ? CrossFadeState.showFirst
+                  : CrossFadeState.showSecond,
+              firstChild: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Ціль:',
+                        style: TextStyle(color: Colors.grey, fontSize: 12),
+                      ),
+                      Text(
+                        '${_targetHum.toStringAsFixed(1)} %',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.blueAccent,
+                        ),
+                      ),
+                    ],
+                  ),
+                  Slider(
+                    value: _targetHum,
+                    min: 10.0,
+                    max: 95.0,
+                    divisions: 170,
+                    label: '${_targetHum.toStringAsFixed(1)}%',
+                    activeColor: Colors.blueAccent,
+                    inactiveColor: Colors.blueAccent.withOpacity(0.3),
+                    onChanged: (val) => setState(() => _targetHum = val),
+                    onChangeEnd: _sendHumTarget,
+                  ),
+                ],
+              ),
+              secondChild: const SizedBox.shrink(),
             ),
           ],
         ),

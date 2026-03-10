@@ -120,8 +120,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (context) =>
-                    IncubatorV1CalibrationScreen(device: device),
+                builder: (context) => IncubatorV1ControlScreen(device: device),
               ),
             );
           } else {
