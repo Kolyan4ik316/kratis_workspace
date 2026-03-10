@@ -3,6 +3,7 @@ import '../models/kratis_models.dart';
 import '../services/data_manager.dart';
 import 'wifi_setup_screen.dart';
 import 'incubator_v1_control_screen.dart';
+import 'incubator_v1_calibration.dart';
 import 'device_control_screen.dart';
 
 class DevicesScreen extends StatefulWidget {
@@ -119,7 +120,8 @@ class _DevicesScreenState extends State<DevicesScreen> {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (context) => IncubatorV1ControlScreen(device: device),
+                builder: (context) =>
+                    IncubatorV1CalibrationScreen(device: device),
               ),
             );
           } else {
